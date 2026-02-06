@@ -78,11 +78,7 @@ impl ProxyConfig {
     }
 }
 
-pub(crate) fn connect_proxy_stream(
-    uri: &Uri,
-    host: &str,
-    port: u16,
-) -> Result<Option<TcpStream>> {
+pub(crate) fn connect_proxy_stream(uri: &Uri, host: &str, port: u16) -> Result<Option<TcpStream>> {
     let mode = super::client::uri_mode(uri)?;
     let Some(proxy) = proxy_from_env_for_host(host, port, mode)? else {
         return Ok(None);
@@ -90,9 +86,7 @@ pub(crate) fn connect_proxy_stream(
 
     let stream = match proxy.scheme {
         ProxyScheme::Http => connect_http_proxy(&proxy, host, port)?,
-        ProxyScheme::Socks5 | ProxyScheme::Socks5h => {
-            connect_socks5_proxy(&proxy, host, port)?
-        }
+        ProxyScheme::Socks5 | ProxyScheme::Socks5h => connect_socks5_proxy(&proxy, host, port)?,
     };
 
     Ok(Some(stream))
@@ -108,7 +102,7 @@ fn proxy_from_env_for_host(host: &str, port: u16, mode: Mode) -> Result<Option<P
         Mode::Tls => get_env_first(&["HTTPS_PROXY", "https_proxy"])
             .or_else(|| get_env_first(&["HTTP_PROXY", "http_proxy"])),
     }
-        .or_else(|| get_env_first(&["ALL_PROXY", "all_proxy"]));
+    .or_else(|| get_env_first(&["ALL_PROXY", "all_proxy"]));
 
     let Some(proxy) = proxy else {
         return Ok(None);
@@ -257,12 +251,12 @@ fn percent_decode(value: &str) -> Result<String> {
     let mut chars = value.as_bytes().iter().copied();
     while let Some(byte) = chars.next() {
         if byte == b'%' {
-            let hi = chars.next().ok_or_else(|| {
-                Error::Url(UrlError::InvalidProxyConfig(value.into()))
-            })?;
-            let lo = chars.next().ok_or_else(|| {
-                Error::Url(UrlError::InvalidProxyConfig(value.into()))
-            })?;
+            let hi = chars
+                .next()
+                .ok_or_else(|| Error::Url(UrlError::InvalidProxyConfig(value.into())))?;
+            let lo = chars
+                .next()
+                .ok_or_else(|| Error::Url(UrlError::InvalidProxyConfig(value.into())))?;
             let decoded = (from_hex(hi)? << 4) | from_hex(lo)?;
             output.push(decoded);
         } else {
@@ -277,9 +271,7 @@ fn from_hex(byte: u8) -> Result<u8> {
         b'0'..=b'9' => Ok(byte - b'0'),
         b'a'..=b'f' => Ok(byte - b'a' + 10),
         b'A'..=b'F' => Ok(byte - b'A' + 10),
-        _ => Err(Error::Url(UrlError::InvalidProxyConfig(
-            "invalid percent-encoding".into(),
-        ))),
+        _ => Err(Error::Url(UrlError::InvalidProxyConfig("invalid percent-encoding".into()))),
     }
 }
 
@@ -338,10 +330,7 @@ fn read_connect_response(reader: &mut impl Read) -> Result<Vec<u8>> {
 }
 
 /// Build the bytes for an HTTP CONNECT request.
-pub fn build_http_connect_request(
-    authority: &str,
-    auth: Option<&ProxyAuth>,
-) -> Result<Vec<u8>> {
+pub fn build_http_connect_request(authority: &str, auth: Option<&ProxyAuth>) -> Result<Vec<u8>> {
     let mut request = Vec::new();
     request.extend_from_slice(format!("CONNECT {authority} HTTP/1.1\r\n").as_bytes());
     request.extend_from_slice(format!("Host: {authority}\r\n").as_bytes());
@@ -357,29 +346,21 @@ pub fn build_http_connect_request(
 /// Parse an HTTP CONNECT response and return the status code.
 pub fn parse_http_connect_response(response: &[u8]) -> Result<u16> {
     let text = std::str::from_utf8(response).map_err(|_| {
-        Error::Url(UrlError::ProxyConnect(
-            "HTTP CONNECT response not valid UTF-8".into(),
-        ))
+        Error::Url(UrlError::ProxyConnect("HTTP CONNECT response not valid UTF-8".into()))
     })?;
 
     let mut lines = text.lines();
     let status_line = lines.next().ok_or_else(|| {
-        Error::Url(UrlError::ProxyConnect(
-            "HTTP CONNECT response missing status line".into(),
-        ))
+        Error::Url(UrlError::ProxyConnect("HTTP CONNECT response missing status line".into()))
     })?;
 
     let mut parts = status_line.split_whitespace();
     let _version = parts.next();
     let code = parts.next().ok_or_else(|| {
-        Error::Url(UrlError::ProxyConnect(
-            "HTTP CONNECT response missing status code".into(),
-        ))
+        Error::Url(UrlError::ProxyConnect("HTTP CONNECT response missing status code".into()))
     })?;
     code.parse::<u16>().map_err(|_| {
-        Error::Url(UrlError::ProxyConnect(
-            "HTTP CONNECT response invalid status code".into(),
-        ))
+        Error::Url(UrlError::ProxyConnect("HTTP CONNECT response invalid status code".into()))
     })
 }
 
@@ -422,9 +403,7 @@ fn socks5_handshake(
     let mut choice = [0u8; 2];
     stream.read_exact(&mut choice)?;
     if choice[0] != 0x05 {
-        return Err(Error::Url(UrlError::ProxyConnect(
-            "SOCKS5: invalid response version".into(),
-        )));
+        return Err(Error::Url(UrlError::ProxyConnect("SOCKS5: invalid response version".into())));
     }
 
     match choice[1] {
@@ -458,9 +437,7 @@ fn socks5_userpass_auth(stream: &mut (impl Read + Write), auth: &ProxyAuth) -> R
     let password = auth.password.as_bytes();
 
     if username.len() > u8::MAX as usize || password.len() > u8::MAX as usize {
-        return Err(Error::Url(UrlError::ProxyConnect(
-            "SOCKS5 auth credentials too long".into(),
-        )));
+        return Err(Error::Url(UrlError::ProxyConnect("SOCKS5 auth credentials too long".into())));
     }
 
     let mut buf = Vec::with_capacity(3 + username.len() + password.len());
@@ -476,9 +453,7 @@ fn socks5_userpass_auth(stream: &mut (impl Read + Write), auth: &ProxyAuth) -> R
     let mut response = [0u8; 2];
     stream.read_exact(&mut response)?;
     if response[0] != 0x01 || response[1] != 0x00 {
-        return Err(Error::Url(UrlError::ProxyConnect(
-            "SOCKS5 authentication failed".into(),
-        )));
+        return Err(Error::Url(UrlError::ProxyConnect("SOCKS5 authentication failed".into())));
     }
 
     Ok(())
@@ -499,9 +474,7 @@ fn send_socks5_connect(stream: &mut (impl Read + Write), host: &str, port: u16) 
     } else {
         let host_bytes = host.as_bytes();
         if host_bytes.len() > u8::MAX as usize {
-            return Err(Error::Url(UrlError::ProxyConnect(
-                "SOCKS5 domain name too long".into(),
-            )));
+            return Err(Error::Url(UrlError::ProxyConnect("SOCKS5 domain name too long".into())));
         }
         request.push(0x03);
         request.push(host_bytes.len() as u8);
@@ -515,9 +488,7 @@ fn send_socks5_connect(stream: &mut (impl Read + Write), host: &str, port: u16) 
     let mut header = [0u8; 4];
     stream.read_exact(&mut header)?;
     if header[0] != 0x05 {
-        return Err(Error::Url(UrlError::ProxyConnect(
-            "SOCKS5: invalid response version".into(),
-        )));
+        return Err(Error::Url(UrlError::ProxyConnect("SOCKS5: invalid response version".into())));
     }
 
     if header[1] != 0x00 {
@@ -535,11 +506,7 @@ fn send_socks5_connect(stream: &mut (impl Read + Write), host: &str, port: u16) 
             len[0] as usize
         }
         0x04 => 16,
-        _ => {
-            return Err(Error::Url(UrlError::ProxyConnect(
-                "SOCKS5: invalid address type".into(),
-            )))
-        }
+        _ => return Err(Error::Url(UrlError::ProxyConnect("SOCKS5: invalid address type".into()))),
     };
 
     let mut discard = vec![0u8; addr_len + 2];
@@ -552,8 +519,8 @@ mod tests {
     use std::io::{Read, Write};
 
     use super::{
-        build_http_connect_request, http_connect, parse_http_connect_response, socks5_handshake,
-        split_host_port, should_bypass_proxy, ProxyAuth,
+        build_http_connect_request, http_connect, parse_http_connect_response, should_bypass_proxy,
+        socks5_handshake, split_host_port, ProxyAuth,
     };
 
     struct MockStream {

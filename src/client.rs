@@ -15,14 +15,14 @@ use crate::{
     stream::MaybeTlsStream,
 };
 
+#[cfg(feature = "proxy")]
+use crate::proxy;
 use crate::{
     error::{Error, Result, UrlError},
     handshake::{client::ClientHandshake, HandshakeError},
     protocol::WebSocket,
     stream::{Mode, NoDelay},
 };
-#[cfg(feature = "proxy")]
-use crate::proxy;
 
 /// Connect to the given WebSocket in blocking mode.
 ///
