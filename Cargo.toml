@@ -74,7 +74,7 @@ version = "0.8.0"
 
 [dependencies.webpki-roots]
 optional = true
-version = "0.26"
+version = "1.0"
 
 [dev-dependencies]
 http = "1.0"
