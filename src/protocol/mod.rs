@@ -875,7 +875,10 @@ impl WebSocketContext {
                     }
                     (Some((payload, t)), false) => {
                         let mut incomplete = match is_compressed {
-                            #[cfg(feature = "deflate")]
+                            #[cfg(all(
+                                feature = "deflate",
+                                not(all(target_arch = "wasm32", target_os = "unknown"))
+                            ))]
                             true => IncompleteMessage::new_compressed(t),
                             _ => IncompleteMessage::new(t),
                         };
@@ -1025,8 +1028,10 @@ impl<T> CheckConnectionReset for Result<T> {
 #[cfg(test)]
 mod tests {
     use super::{Message, Role, WebSocket, WebSocketConfig};
-    use crate::error::{CapacityError, Error};
-    use crate::extensions::ExtensionsConfig;
+    use crate::{
+        error::{CapacityError, Error},
+        extensions::ExtensionsConfig,
+    };
 
     use std::{io, io::Cursor};
 
@@ -1088,7 +1093,7 @@ mod tests {
         ));
     }
 
-    #[cfg(feature = "deflate")]
+    #[cfg(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))))]
     #[test]
     fn per_message_deflate_compression() {
         // Example frames from RFC 7692 Section 7.2.3.2
@@ -1131,7 +1136,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "deflate")]
+    #[cfg(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))))]
     #[test]
     fn per_message_deflate_decompression() {
         // Example frames from RFC 7692 Section 7.2.3.2
@@ -1165,14 +1170,15 @@ mod tests {
         ));
     }
 
-    #[cfg(feature = "deflate")]
+    #[cfg(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))))]
     #[test]
     fn per_message_compression_decompress_respects_message_size_limit() {
-        use crate::extensions::compression::deflate::test::very_compressed;
-        use crate::extensions::compression::deflate::DeflateConfig;
-        use crate::protocol::frame::{
-            coding::{Data, OpCode},
-            FrameHeader,
+        use crate::{
+            extensions::compression::deflate::{test::very_compressed, DeflateConfig},
+            protocol::frame::{
+                coding::{Data, OpCode},
+                FrameHeader,
+            },
         };
 
         let _ = env_logger::try_init();

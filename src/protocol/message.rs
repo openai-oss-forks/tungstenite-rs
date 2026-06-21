@@ -83,7 +83,7 @@ use bytes::Bytes;
 #[derive(Debug)]
 pub struct IncompleteMessage {
     collector: IncompleteMessageCollector,
-    #[cfg(feature = "deflate")]
+    #[cfg(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))))]
     compressed: bool,
 }
 
@@ -101,13 +101,16 @@ impl IncompleteMessage {
                 MessageType::Binary => IncompleteMessageCollector::Binary(Vec::new()),
                 MessageType::Text => IncompleteMessageCollector::Text(StringCollector::new()),
             },
-            #[cfg(feature = "deflate")]
+            #[cfg(all(
+                feature = "deflate",
+                not(all(target_arch = "wasm32", target_os = "unknown"))
+            ))]
             compressed: false,
         }
     }
 
     /// Create new instance that will hold compressed data.
-    #[cfg(feature = "deflate")]
+    #[cfg(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))))]
     pub fn new_compressed(message_type: MessageType) -> Self {
         IncompleteMessage {
             collector: match message_type {
@@ -119,9 +122,12 @@ impl IncompleteMessage {
     }
 
     pub fn compressed(&self) -> bool {
-        #[cfg(feature = "deflate")]
+        #[cfg(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))))]
         return self.compressed;
-        #[cfg(not(feature = "deflate"))]
+        #[cfg(not(all(
+            feature = "deflate",
+            not(all(target_arch = "wasm32", target_os = "unknown"))
+        )))]
         return false;
     }
 
