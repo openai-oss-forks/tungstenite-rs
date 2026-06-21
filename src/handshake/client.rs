@@ -431,7 +431,7 @@ mod tests {
         assert_eq!(&request[..], &correct[..]);
     }
 
-    #[cfg(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))))]
+    #[cfg(feature = "deflate")]
     #[test]
     fn request_with_compression() {
         use crate::extensions::{compression::deflate::DeflateConfig, ExtensionsConfig};

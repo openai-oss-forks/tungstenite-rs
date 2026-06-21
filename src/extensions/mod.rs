@@ -4,12 +4,12 @@
 use bytes::Bytes;
 use thiserror::Error;
 
+use crate::extensions::compression::{
+    CompressionError, DecompressionError, PerMessageCompressionContext,
+};
 #[cfg(feature = "handshake")]
 use crate::extensions::headers::{SecWebsocketExtensions, WebsocketProtocolExtension};
-use crate::{
-    extensions::compression::{CompressionError, DecompressionError, PerMessageCompressionContext},
-    protocol::Role,
-};
+use crate::protocol::Role;
 
 pub mod compression;
 #[cfg(feature = "headers")]
@@ -31,7 +31,7 @@ pub struct ExtensionsConfig {
     /// Configuration for the `permessage-deflate` PMCE as specified by [RFC 7692].
     ///
     /// [RFC 7692]: https://tools.ietf.org/html/rfc7692
-    #[cfg(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))))]
+    #[cfg(feature = "deflate")]
     pub permessage_deflate: Option<compression::deflate::DeflateConfig>,
 }
 
@@ -53,17 +53,14 @@ pub enum ExtensionsError {
 impl ExtensionsConfig {
     pub(crate) fn generate_offers(&self) -> impl Iterator<Item = WebsocketProtocolExtension> {
         let Self {
-            #[cfg(all(
-                feature = "deflate",
-                not(all(target_arch = "wasm32", target_os = "unknown"))
-            ))]
+            #[cfg(feature = "deflate")]
             permessage_deflate,
         } = self;
 
         #[allow(unused_mut, unused_assignments)]
         let mut permessage_compression_offer = None;
 
-        #[cfg(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))))]
+        #[cfg(feature = "deflate")]
         {
             permessage_compression_offer = permessage_deflate.as_ref().map(|p| p.as_offer().into());
         }
@@ -82,21 +79,12 @@ impl ExtensionsConfig {
         &self,
         agreed: SecWebsocketExtensions,
     ) -> Result<Extensions, ExtensionsError> {
-        #[cfg_attr(
-            not(all(
-                feature = "deflate",
-                not(all(target_arch = "wasm32", target_os = "unknown"))
-            )),
-            allow(unused_mut)
-        )]
+        #[cfg_attr(not(feature = "deflate"), allow(unused_mut))]
         let mut per_message_compression = None;
 
         for extension in agreed.iter() {
             match extension.name() {
-                #[cfg(all(
-                    feature = "deflate",
-                    not(all(target_arch = "wasm32", target_os = "unknown"))
-                ))]
+                #[cfg(feature = "deflate")]
                 compression::deflate::EXTENSION_NAME => {
                     use compression::deflate::{
                         DeflateContext, DeflateParameterError, PermessageDeflateConfig,
@@ -145,23 +133,14 @@ impl ExtensionsConfig {
         &self,
         extensions: &SecWebsocketExtensions,
     ) -> Result<(Extensions, Option<SecWebsocketExtensions>), ExtensionsError> {
-        #[cfg_attr(
-            not(all(
-                feature = "deflate",
-                not(all(target_arch = "wasm32", target_os = "unknown"))
-            )),
-            allow(unused_mut)
-        )]
+        #[cfg_attr(not(feature = "deflate"), allow(unused_mut))]
         let mut per_message_compression = None;
 
         for extension in extensions.iter() {
             // Only one extension is currently supported. If that changes,
             // this will need to be updated to apply the extensions in the correct order.
             match extension.name() {
-                #[cfg(all(
-                    feature = "deflate",
-                    not(all(target_arch = "wasm32", target_os = "unknown"))
-                ))]
+                #[cfg(feature = "deflate")]
                 compression::deflate::EXTENSION_NAME => {
                     use compression::deflate::{
                         DeflateContext, PermessageDeflateConfig, EXTENSION_NAME,
@@ -249,26 +228,14 @@ impl ExtensionsConfig {
         // extension is supported. If more are added there will need to be some
         // resolution strategy for picking which one takes precedence.
         let Self {
-            #[cfg(all(
-                feature = "deflate",
-                not(all(target_arch = "wasm32", target_os = "unknown"))
-            ))]
+            #[cfg(feature = "deflate")]
             permessage_deflate,
         } = self;
 
-        #[cfg_attr(
-            all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))),
-            allow(unused_assignments)
-        )]
-        #[cfg_attr(
-            not(all(
-                feature = "deflate",
-                not(all(target_arch = "wasm32", target_os = "unknown"))
-            )),
-            allow(unused_mut)
-        )]
+        #[cfg_attr(feature = "deflate", allow(unused_assignments))]
+        #[cfg_attr(not(feature = "deflate"), allow(unused_mut))]
         let mut per_message_compression = None;
-        #[cfg(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))))]
+        #[cfg(feature = "deflate")]
         {
             per_message_compression = permessage_deflate
                 .map(|deflate| compression::deflate::DeflateContext::new(role, deflate).into());
@@ -345,7 +312,7 @@ mod test {
         assert_eq!(response, None);
     }
 
-    #[cfg(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))))]
+    #[cfg(feature = "deflate")]
     #[test]
     fn accept_offers_with_deflate_enabled() {
         let extensions = ExtensionsConfig { permessage_deflate: Some(Default::default()) };
@@ -379,7 +346,7 @@ mod test {
         }
     }
 
-    #[cfg(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))))]
+    #[cfg(feature = "deflate")]
     #[test]
     fn accept_offers_picks_first_acceptable_offer() {
         use compression::deflate::*;
@@ -421,7 +388,7 @@ mod test {
         )
     }
 
-    #[cfg(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))))]
+    #[cfg(feature = "deflate")]
     #[test]
     fn verify_agreed_on_deflate_then_garbage() {
         let extensions = ExtensionsConfig { permessage_deflate: Some(Default::default()) };
@@ -434,7 +401,7 @@ mod test {
         assert_eq!(result.unwrap_err(), ExtensionsError::InvalidExtension("unrecognized".into()));
     }
 
-    #[cfg(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))))]
+    #[cfg(feature = "deflate")]
     #[test]
     fn verify_agreed_on_deflate_multiple_times() {
         let extensions = ExtensionsConfig { permessage_deflate: Some(Default::default()) };

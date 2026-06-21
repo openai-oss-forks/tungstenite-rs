@@ -5,18 +5,15 @@
 use bytes::Bytes;
 use thiserror::Error;
 
-#[cfg(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))))]
+#[cfg(feature = "deflate")]
 pub mod deflate;
 
 /// Active context for performing per-message compression.
 #[derive(Debug)]
-#[cfg_attr(
-    not(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown")))),
-    allow(missing_copy_implementations)
-)] // This is only trivially copyable if compression is disabled.
+#[cfg_attr(not(feature = "deflate"), allow(missing_copy_implementations))] // This is only trivially copyable if compression is disabled.
 pub enum PerMessageCompressionContext {
     /// Context for compressing/decompressing with `permessage-deflate`.
-    #[cfg(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))))]
+    #[cfg(feature = "deflate")]
     Deflate(deflate::DeflateContext),
 }
 
@@ -25,7 +22,7 @@ pub enum PerMessageCompressionContext {
 pub enum CompressionError {
     /// Error encountered while deflating or inflating
     #[error("Deflate error: {0}")]
-    #[cfg(all(feature = "deflate", not(all(target_arch = "wasm32", target_os = "unknown"))))]
+    #[cfg(feature = "deflate")]
     Deflate(deflate::DeflateError),
 }
 
@@ -46,17 +43,11 @@ impl PerMessageCompressionContext {
         &'s mut self,
     ) -> impl FnMut(&Bytes) -> Result<Bytes, CompressionError> + 's {
         move |payload: &Bytes| match self {
-            #[cfg(all(
-                feature = "deflate",
-                not(all(target_arch = "wasm32", target_os = "unknown"))
-            ))]
+            #[cfg(feature = "deflate")]
             Self::Deflate(deflate_config) => {
                 deflate_config.compress(payload).map_err(CompressionError::Deflate)
             }
-            #[cfg(not(all(
-                feature = "deflate",
-                not(all(target_arch = "wasm32", target_os = "unknown"))
-            )))]
+            #[cfg(not(feature = "deflate"))]
             _ => {
                 let _ = payload;
                 unreachable!("*PerMessageCompressionContext is uninhabited")
@@ -69,17 +60,11 @@ impl PerMessageCompressionContext {
         &'s mut self,
     ) -> impl FnMut(&Bytes, bool, usize) -> Result<Bytes, DecompressionError> + 's {
         move |payload, is_final, size_limit| match self {
-            #[cfg(all(
-                feature = "deflate",
-                not(all(target_arch = "wasm32", target_os = "unknown"))
-            ))]
+            #[cfg(feature = "deflate")]
             Self::Deflate(deflate_config) => deflate_config
                 .decompress(payload, is_final, size_limit)
                 .map_err(|e| e.map(CompressionError::Deflate)),
-            #[cfg(not(all(
-                feature = "deflate",
-                not(all(target_arch = "wasm32", target_os = "unknown"))
-            )))]
+            #[cfg(not(feature = "deflate"))]
             _ => {
                 let _ = (payload, is_final, size_limit);
                 unreachable!("*PerMessageCompressionContext is uninhabited")

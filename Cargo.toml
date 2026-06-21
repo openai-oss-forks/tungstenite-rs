@@ -11,7 +11,7 @@ documentation = "https://docs.rs/tungstenite/0.27.0"
 repository = "https://github.com/snapview/tungstenite-rs"
 version = "0.27.0"
 edition = "2021"
-rust-version = "1.63"
+rust-version = "1.75"
 include = ["benches/**/*", "src/**/*", "examples/**/*", "LICENSE-*", "README.md", "CHANGELOG.md"]
 
 [package.metadata.docs.rs]
@@ -43,15 +43,14 @@ thiserror = "2.0.7"
 url = { version = "2.1.0", optional = true }
 utf-8 = "0.7.5"
 
-[target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies.flate2]
+[dependencies.flate2]
 optional = true
-version = "1.0.27"
+version = "1.1.0"
 default-features = false
-# We need some zlib-compatible backend from flate2 to support setting the
-# context window size. Enabling the "zlib" feature is enough, and, per the
-# flate2 documentation, if other crates in the build graph enable the "zlib-ng"
-# or "zlib-ng-compat" features, those will take precedence.
-features = ["zlib"]
+# permessage-deflate needs a backend that supports setting the context window
+# size without carrying flate2's native libz-sys backend into
+# wasm32-unknown-unknown, where zlib has no libc sysroot.
+features = ["zlib-rs"]
 
 [dependencies.native-tls-crate]
 optional = true
