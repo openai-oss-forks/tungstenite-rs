@@ -208,9 +208,19 @@ impl FrameHeader {
     }
 }
 
+/// Whether this frame ends the current WebSocket message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fragment {
+    /// At least one more frame follows in this message.
+    More,
+    /// This is the last frame of the message.
+    Final,
+}
+
 /// A struct representing a WebSocket frame.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Frame {
+    pub(in crate::protocol) encode_extensions: bool,
     header: FrameHeader,
     payload: Bytes,
 }
@@ -300,9 +310,21 @@ impl Frame {
     pub fn message(data: impl Into<Bytes>, opcode: OpCode, is_final: bool) -> Frame {
         debug_assert!(matches!(opcode, OpCode::Data(_)), "Invalid opcode for data frame.");
         Frame {
+            encode_extensions: false,
             header: FrameHeader { is_final, opcode, ..FrameHeader::default() },
             payload: data.into(),
         }
+    }
+
+    /// Create a message fragment for writing with negotiated extensions.
+    ///
+    /// Send the first fragment with `Data::Text` or `Data::Binary`, then send
+    /// `Data::Continue` fragments until the final one. When permessage-deflate
+    /// is negotiated, all fragments share one compression context for the message.
+    pub fn message_fragment(data: impl Into<Bytes>, opcode: Data, fragment: Fragment) -> Frame {
+        let mut frame = Self::message(data, OpCode::Data(opcode), fragment == Fragment::Final);
+        frame.encode_extensions = true;
+        frame
     }
 
     /// Create a new compressed data frame.
@@ -314,6 +336,7 @@ impl Frame {
     #[inline]
     pub(crate) fn compressed_message(data: Bytes, opcode: Data, is_final: bool) -> Frame {
         Frame {
+            encode_extensions: false,
             header: FrameHeader {
                 is_final,
                 opcode: OpCode::Data(opcode),
@@ -324,7 +347,7 @@ impl Frame {
                 //   Compressed" bit.  On a WebSocket connection where a PMCE is
                 //   in use, this bit indicates whether a message is compressed
                 //   or not.
-                rsv1: true,
+                rsv1: opcode != Data::Continue,
                 ..FrameHeader::default()
             },
             payload: data,
@@ -335,6 +358,7 @@ impl Frame {
     #[inline]
     pub fn pong(data: impl Into<Bytes>) -> Frame {
         Frame {
+            encode_extensions: false,
             header: FrameHeader {
                 opcode: OpCode::Control(Control::Pong),
                 ..FrameHeader::default()
@@ -347,6 +371,7 @@ impl Frame {
     #[inline]
     pub fn ping(data: impl Into<Bytes>) -> Frame {
         Frame {
+            encode_extensions: false,
             header: FrameHeader {
                 opcode: OpCode::Control(Control::Ping),
                 ..FrameHeader::default()
@@ -367,12 +392,12 @@ impl Frame {
             <_>::default()
         };
 
-        Frame { header: FrameHeader::default(), payload: payload.into() }
+        Frame { encode_extensions: false, header: FrameHeader::default(), payload: payload.into() }
     }
 
     /// Create a frame from given header and data.
     pub fn from_payload(header: FrameHeader, payload: Bytes) -> Self {
-        Frame { header, payload }
+        Frame { encode_extensions: false, header, payload }
     }
 
     /// Write a frame out to a buffer
