@@ -19,7 +19,10 @@ use crate::{
 };
 use bytes::{Buf, BytesMut};
 use log::*;
-use std::io::{self, Cursor, Error as IoError, ErrorKind as IoErrorKind, Read, Write};
+use std::{
+    fmt,
+    io::{self, Cursor, Error as IoError, ErrorKind as IoErrorKind, Read, Write},
+};
 
 /// Read buffer size used for `FrameSocket`.
 const READ_BUF_LEN: usize = 128 * 1024;
@@ -46,8 +49,7 @@ impl<Stream> FrameSocket<Stream> {
 
     /// Extract a stream from the socket.
     pub fn into_inner(mut self) -> (Stream, BytesMut) {
-        let filled = self.codec.buffered().len();
-        self.codec.in_buffer.truncate(filled);
+        self.codec.discard_spare();
         (self.stream, self.codec.in_buffer)
     }
 
@@ -102,7 +104,6 @@ where
 }
 
 /// A codec for WebSocket frames.
-#[derive(Debug)]
 pub(super) struct FrameCodec {
     /// Buffer to read data from the stream.
     in_buffer: BytesMut,
@@ -122,6 +123,20 @@ pub(super) struct FrameCodec {
     out_buffer_write_len: usize,
     /// Header and remaining size of the incoming packet being processed.
     header: Option<(FrameHeader, u64)>,
+}
+
+impl fmt::Debug for FrameCodec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FrameCodec")
+            .field("in_buffer_len", &self.buffered().len())
+            .field("in_buffer_spare", &self.in_buffer_spare)
+            .field("in_buf_max_read", &self.in_buf_max_read)
+            .field("out_buffer", &self.out_buffer)
+            .field("max_out_buffer_len", &self.max_out_buffer_len)
+            .field("out_buffer_write_len", &self.out_buffer_write_len)
+            .field("header", &self.header)
+            .finish()
+    }
 }
 
 impl FrameCodec {
@@ -195,10 +210,9 @@ impl FrameCodec {
 
                     // Reserve full message length only once, even for multiple
                     // loops or if WouldBlock errors cause multiple fn calls.
-                    self.in_buffer.reserve(len.saturating_sub(self.in_buffer_spare));
+                    self.reserve_read_buffer(len);
                 } else {
-                    self.in_buffer
-                        .reserve(FrameHeader::MAX_SIZE.saturating_sub(self.in_buffer_spare));
+                    self.reserve_read_buffer(FrameHeader::MAX_SIZE);
                 }
             }
 
@@ -241,6 +255,19 @@ impl FrameCodec {
     /// Bytes received from the stream and available to the frame parser.
     fn buffered(&self) -> &[u8] {
         &self.in_buffer[..self.in_buffer.len() - self.in_buffer_spare]
+    }
+
+    fn discard_spare(&mut self) {
+        self.in_buffer.truncate(self.buffered().len());
+        self.in_buffer_spare = 0;
+    }
+
+    fn reserve_read_buffer(&mut self, len: usize) {
+        if self.in_buffer.capacity() < len {
+            // BytesMut can reclaim space at the front if only the received bytes need to move.
+            self.discard_spare();
+            self.in_buffer.reserve(len - self.in_buffer.len());
+        }
     }
 
     /// Initialize at most one read ahead, even when a header reserves a large payload.
@@ -384,9 +411,25 @@ mod tests {
             assert!(sock.read(None).no_block().unwrap().is_none());
             assert!(sock.codec.in_buffer.len() <= 3 + super::READ_BUF_LEN);
         }
+        assert!(format!("{:?}", sock.codec).len() < super::READ_BUF_LEN);
         let (reader, remaining) = sock.into_inner();
         assert_eq!(reader.polls, 2);
         assert_eq!(remaining.as_ref(), b"abc");
+    }
+
+    #[test]
+    fn payload_reservation_reclaims_consumed_space() {
+        let mut wire = vec![0x82, 16];
+        wire.resize(18, 0);
+        wire.extend_from_slice(b"\x82\x38abc"); // 56-byte frame with three payload bytes so far.
+        let mut sock = FrameSocket { stream: Cursor::new(wire), codec: super::FrameCodec::new(64) };
+        let capacity = sock.codec.in_buffer.capacity();
+
+        assert_eq!(sock.read(None).unwrap().unwrap().payload().len(), 16);
+        assert!(sock.read(None).unwrap().is_none());
+        let (_, remaining) = sock.into_inner();
+        assert_eq!(remaining.as_ref(), b"abc");
+        assert!(remaining.capacity() <= capacity);
     }
 
     #[test]
