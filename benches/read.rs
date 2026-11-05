@@ -4,7 +4,7 @@ use std::{
     io::{self, Read, Write},
     sync::{Arc, Mutex},
 };
-use tungstenite::{protocol::Role, Message, WebSocket};
+use tungstenite::{protocol::Role, Error, Message, WebSocket};
 
 /// Mock stream with no artificial delays.
 #[derive(Default, Clone)]
@@ -85,6 +85,18 @@ fn benchmark(c: &mut Criterion) {
 
     c.bench_function("read 100k small messages (client)", |b| {
         read_100k(Role::Client, b);
+    });
+
+    c.bench_function("read one small message then WouldBlock (client)", |b| {
+        let mut stream = MockIo::default();
+        let mut ws = WebSocket::from_raw_socket(stream.clone(), Role::Client, None);
+        b.iter(|| {
+            stream.write_all(b"\x81\x05hello").unwrap();
+            assert!(matches!(ws.read(), Ok(Message::Text(_))));
+            assert!(
+                matches!(ws.read(), Err(Error::Io(e)) if e.kind() == io::ErrorKind::WouldBlock)
+            );
+        });
     });
 }
 
