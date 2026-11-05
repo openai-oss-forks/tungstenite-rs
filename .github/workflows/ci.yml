@@ -74,8 +74,17 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get install libssl-dev
 
+      - name: Install dependency resolver
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+
+      - name: Resolve MSRV-compatible dependencies
+        # Cargo 1.75 predates the Rust-version-aware resolver.
+        run: cargo +stable generate-lockfile
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+
       - name: Check deflate feature
-        run: cargo check --features deflate
+        run: cargo +${{ matrix.rust }} check --locked --features deflate
 
   autobahn:
     name: Autobahn tests

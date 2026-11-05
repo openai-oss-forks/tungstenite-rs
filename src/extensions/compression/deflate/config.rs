@@ -4,8 +4,10 @@ use flate2::Compression;
 use log::*;
 use thiserror::Error;
 
-use crate::extensions::headers::{WebsocketExtensionParam, WebsocketProtocolExtension};
-use crate::protocol::Role;
+use crate::{
+    extensions::headers::{WebsocketExtensionParam, WebsocketProtocolExtension},
+    protocol::Role,
+};
 
 /// Name of the extension as it appears in the Sec-WebSocket-Extensions header.
 ///
@@ -873,7 +875,7 @@ mod test {
             MODIFIERS
                 .iter()
                 .enumerate()
-                .filter(|(i, _)| (selector & (1 << i) != 0))
+                .filter(|(i, _)| selector & (1 << i) != 0)
                 .fold(DeflateConfig::new(), |config, (_, modifier)| modifier(config))
         }
 
