@@ -196,31 +196,23 @@ impl FrameCodec {
                 let advanced = cursor.position();
                 self.header = header;
                 bytes::Buf::advance(&mut self.in_buffer, advanced as _);
-
-                if let Some((_, len)) = &self.header {
-                    let len = *len as usize;
-
-                    // Enforce frame size limit early
-                    if len > max_size {
-                        return Err(Error::Capacity(CapacityError::MessageTooLong {
-                            size: len,
-                            max_size,
-                        }));
-                    }
-
-                    // Reserve full message length only once, even for multiple
-                    // loops or if WouldBlock errors cause multiple fn calls.
-                    self.reserve_read_buffer(len);
-                } else {
-                    self.reserve_read_buffer(FrameHeader::MAX_SIZE);
-                }
             }
 
             if let Some((_, len)) = &self.header {
                 let len = *len as usize;
+                // A retry can supply a different limit for the same frame.
+                if len > max_size {
+                    return Err(Error::Capacity(CapacityError::MessageTooLong {
+                        size: len,
+                        max_size,
+                    }));
+                }
                 if len <= self.buffered().len() {
                     break self.in_buffer.split_to(len);
                 }
+                self.reserve_read_buffer(len);
+            } else {
+                self.reserve_read_buffer(FrameHeader::MAX_SIZE);
             }
 
             // Not enough data in buffer.
@@ -509,5 +501,20 @@ mod tests {
             sock.read(Some(5)),
             Err(Error::Capacity(CapacityError::MessageTooLong { size: 7, max_size: 5 }))
         ));
+    }
+
+    #[test]
+    fn retry_after_frame_size_limit() {
+        // The first read fills the buffer with one frame and part of the next.
+        let raw = Cursor::new(b"\x82\x071234567\x82\x08abcdefgh");
+        let mut sock = FrameSocket { stream: raw, codec: super::FrameCodec::new(14) };
+        assert_eq!(sock.read(Some(7)).unwrap().unwrap().payload(), b"1234567");
+        for _ in 0..2 {
+            assert!(matches!(
+                sock.read(Some(7)),
+                Err(Error::Capacity(CapacityError::MessageTooLong { size: 8, max_size: 7 }))
+            ));
+        }
+        assert_eq!(sock.read(Some(8)).unwrap().unwrap().payload(), b"abcdefgh");
     }
 }
