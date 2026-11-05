@@ -19,7 +19,10 @@ use crate::{
 };
 use bytes::{Buf, BytesMut};
 use log::*;
-use std::io::{self, Cursor, Error as IoError, ErrorKind as IoErrorKind, Read, Write};
+use std::{
+    fmt,
+    io::{self, Cursor, Error as IoError, ErrorKind as IoErrorKind, Read, Write},
+};
 
 /// Read buffer size used for `FrameSocket`.
 const READ_BUF_LEN: usize = 128 * 1024;
@@ -45,7 +48,8 @@ impl<Stream> FrameSocket<Stream> {
     }
 
     /// Extract a stream from the socket.
-    pub fn into_inner(self) -> (Stream, BytesMut) {
+    pub fn into_inner(mut self) -> (Stream, BytesMut) {
+        self.codec.discard_spare();
         (self.stream, self.codec.in_buffer)
     }
 
@@ -100,10 +104,12 @@ where
 }
 
 /// A codec for WebSocket frames.
-#[derive(Debug)]
 pub(super) struct FrameCodec {
     /// Buffer to read data from the stream.
     in_buffer: BytesMut,
+    /// Initialized bytes at the end of `in_buffer` that the stream has not filled.
+    /// Consuming a header or payload from the front leaves this count unchanged.
+    in_buffer_spare: usize,
     in_buf_max_read: usize,
     /// Buffer to send packets to the network.
     out_buffer: BytesMut,
@@ -119,11 +125,26 @@ pub(super) struct FrameCodec {
     header: Option<(FrameHeader, u64)>,
 }
 
+impl fmt::Debug for FrameCodec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FrameCodec")
+            .field("in_buffer_len", &self.buffered().len())
+            .field("in_buffer_spare", &self.in_buffer_spare)
+            .field("in_buf_max_read", &self.in_buf_max_read)
+            .field("out_buffer", &self.out_buffer)
+            .field("max_out_buffer_len", &self.max_out_buffer_len)
+            .field("out_buffer_write_len", &self.out_buffer_write_len)
+            .field("header", &self.header)
+            .finish()
+    }
+}
+
 impl FrameCodec {
     /// Create a new frame codec.
     pub(super) fn new(in_buf_len: usize) -> Self {
         Self {
             in_buffer: BytesMut::with_capacity(in_buf_len),
+            in_buffer_spare: 0,
             in_buf_max_read: in_buf_len.max(FrameHeader::MAX_SIZE),
             out_buffer: <_>::default(),
             max_out_buffer_len: usize::MAX,
@@ -138,6 +159,7 @@ impl FrameCodec {
         in_buffer.reserve(min_in_buf_len.saturating_sub(in_buffer.len()));
         Self {
             in_buffer,
+            in_buffer_spare: 0,
             in_buf_max_read: min_in_buf_len.max(FrameHeader::MAX_SIZE),
             out_buffer: <_>::default(),
             max_out_buffer_len: usize::MAX,
@@ -169,35 +191,28 @@ impl FrameCodec {
 
         let mut payload = loop {
             if self.header.is_none() {
-                let mut cursor = Cursor::new(&mut self.in_buffer);
-                self.header = FrameHeader::parse(&mut cursor)?;
+                let mut cursor = Cursor::new(self.buffered());
+                let header = FrameHeader::parse(&mut cursor)?;
                 let advanced = cursor.position();
+                self.header = header;
                 bytes::Buf::advance(&mut self.in_buffer, advanced as _);
-
-                if let Some((_, len)) = &self.header {
-                    let len = *len as usize;
-
-                    // Enforce frame size limit early
-                    if len > max_size {
-                        return Err(Error::Capacity(CapacityError::MessageTooLong {
-                            size: len,
-                            max_size,
-                        }));
-                    }
-
-                    // Reserve full message length only once, even for multiple
-                    // loops or if WouldBlock errors cause multiple fn calls.
-                    self.in_buffer.reserve(len);
-                } else {
-                    self.in_buffer.reserve(FrameHeader::MAX_SIZE);
-                }
             }
 
             if let Some((_, len)) = &self.header {
                 let len = *len as usize;
-                if len <= self.in_buffer.len() {
+                // A retry can supply a different limit for the same frame.
+                if len > max_size {
+                    return Err(Error::Capacity(CapacityError::MessageTooLong {
+                        size: len,
+                        max_size,
+                    }));
+                }
+                if len <= self.buffered().len() {
                     break self.in_buffer.split_to(len);
                 }
+                self.reserve_read_buffer(len);
+            } else {
+                self.reserve_read_buffer(FrameHeader::MAX_SIZE);
             }
 
             // Not enough data in buffer.
@@ -229,14 +244,34 @@ impl FrameCodec {
         Ok(Some(frame))
     }
 
-    /// Read into available `in_buffer` capacity.
+    /// Bytes received from the stream and available to the frame parser.
+    fn buffered(&self) -> &[u8] {
+        &self.in_buffer[..self.in_buffer.len() - self.in_buffer_spare]
+    }
+
+    fn discard_spare(&mut self) {
+        self.in_buffer.truncate(self.buffered().len());
+        self.in_buffer_spare = 0;
+    }
+
+    fn reserve_read_buffer(&mut self, len: usize) {
+        if self.in_buffer.capacity() < len {
+            // BytesMut can reclaim space at the front if only the received bytes need to move.
+            self.discard_spare();
+            self.in_buffer.reserve(len - self.in_buffer.len());
+        }
+    }
+
+    /// Initialize at most one read ahead, even when a header reserves a large payload.
     fn read_in(&mut self, stream: &mut impl Read) -> io::Result<usize> {
-        let len = self.in_buffer.len();
-        debug_assert!(self.in_buffer.capacity() > len);
-        self.in_buffer.resize(self.in_buffer.capacity().min(len + self.in_buf_max_read), 0);
-        let size = stream.read(&mut self.in_buffer[len..]);
-        self.in_buffer.truncate(len + size.as_ref().copied().unwrap_or(0));
-        size
+        let filled = self.buffered().len();
+        let end = self.in_buffer.capacity().min(filled + self.in_buf_max_read);
+        debug_assert!(end > filled);
+        self.in_buffer.resize(end, 0);
+        self.in_buffer_spare = end - filled;
+        let read = stream.read(&mut self.in_buffer[filled..])?;
+        self.in_buffer_spare -= read;
+        Ok(read)
     }
 
     /// Writes a frame into the `out_buffer`.
@@ -343,6 +378,53 @@ mod tests {
     }
 
     #[test]
+    fn stalled_frame_reuses_one_read_window() {
+        struct StalledReader {
+            polls: usize,
+        }
+        impl io::Read for StalledReader {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                assert_eq!(buf.len(), super::READ_BUF_LEN);
+                if self.polls == 0 {
+                    buf[0] = 0xab;
+                } else {
+                    assert_eq!(buf[0], 0xab);
+                }
+                self.polls += 1;
+                Err(io::ErrorKind::WouldBlock.into())
+            }
+        }
+
+        let mut partial = vec![0x82, 127];
+        partial.extend_from_slice(&(16_u64 * 1024 * 1024).to_be_bytes());
+        partial.extend_from_slice(b"abc");
+        let mut sock = FrameSocket::from_partially_read(StalledReader { polls: 0 }, partial);
+        for _ in 0..2 {
+            assert!(sock.read(None).no_block().unwrap().is_none());
+            assert!(sock.codec.in_buffer.len() <= 3 + super::READ_BUF_LEN);
+        }
+        assert!(format!("{:?}", sock.codec).len() < super::READ_BUF_LEN);
+        let (reader, remaining) = sock.into_inner();
+        assert_eq!(reader.polls, 2);
+        assert_eq!(remaining.as_ref(), b"abc");
+    }
+
+    #[test]
+    fn payload_reservation_reclaims_consumed_space() {
+        let mut wire = vec![0x82, 16];
+        wire.resize(18, 0);
+        wire.extend_from_slice(b"\x82\x38abc"); // 56-byte frame with three payload bytes so far.
+        let mut sock = FrameSocket { stream: Cursor::new(wire), codec: super::FrameCodec::new(64) };
+        let capacity = sock.codec.in_buffer.capacity();
+
+        assert_eq!(sock.read(None).unwrap().unwrap().payload().len(), 16);
+        assert!(sock.read(None).unwrap().is_none());
+        let (_, remaining) = sock.into_inner();
+        assert_eq!(remaining.as_ref(), b"abc");
+        assert!(remaining.capacity() <= capacity);
+    }
+
+    #[test]
     fn write_frames() {
         let mut sock = FrameSocket::new(Vec::new());
 
@@ -419,5 +501,20 @@ mod tests {
             sock.read(Some(5)),
             Err(Error::Capacity(CapacityError::MessageTooLong { size: 7, max_size: 5 }))
         ));
+    }
+
+    #[test]
+    fn retry_after_frame_size_limit() {
+        // The first read fills the buffer with one frame and part of the next.
+        let raw = Cursor::new(b"\x82\x071234567\x82\x08abcdefgh");
+        let mut sock = FrameSocket { stream: raw, codec: super::FrameCodec::new(14) };
+        assert_eq!(sock.read(Some(7)).unwrap().unwrap().payload(), b"1234567");
+        for _ in 0..2 {
+            assert!(matches!(
+                sock.read(Some(7)),
+                Err(Error::Capacity(CapacityError::MessageTooLong { size: 8, max_size: 7 }))
+            ));
+        }
+        assert_eq!(sock.read(Some(8)).unwrap().unwrap().payload(), b"abcdefgh");
     }
 }
