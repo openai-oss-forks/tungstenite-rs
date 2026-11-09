@@ -8,7 +8,7 @@ mod mask;
 mod utf8;
 
 pub use self::{
-    frame::{CloseFrame, Frame, FrameHeader},
+    frame::{CloseFrame, Fragment, Frame, FrameHeader},
     utf8::Utf8Bytes,
 };
 

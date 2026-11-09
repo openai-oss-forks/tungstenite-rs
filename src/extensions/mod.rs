@@ -8,7 +8,7 @@ use thiserror::Error;
 use crate::extensions::headers::{SecWebsocketExtensions, WebsocketProtocolExtension};
 use crate::{
     extensions::compression::{CompressionError, DecompressionError, PerMessageCompressionContext},
-    protocol::Role,
+    protocol::{frame::Fragment, Role},
 };
 
 pub mod compression;
@@ -247,7 +247,7 @@ impl ExtensionsConfig {
 }
 
 impl Extensions {
-    /// Returns a function that, if present, compresses a message payload.
+    /// Returns a function that, if present, compresses a message fragment.
     ///
     /// The returned value will only be `Some` if a per-message compression
     /// extension, as specified by [RFC 7692], was configured for the connection
@@ -257,7 +257,7 @@ impl Extensions {
     #[inline]
     pub(crate) fn per_message_compressor<'s>(
         &'s mut self,
-    ) -> Option<impl FnOnce(&Bytes) -> Result<Bytes, CompressionError> + 's> {
+    ) -> Option<impl FnOnce(&Bytes, Fragment) -> Result<Bytes, CompressionError> + 's> {
         let Self { per_message_compression } = self;
 
         per_message_compression.as_mut().map(PerMessageCompressionContext::compressor)

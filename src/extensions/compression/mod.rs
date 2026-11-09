@@ -5,6 +5,8 @@
 use bytes::Bytes;
 use thiserror::Error;
 
+use crate::protocol::frame::Fragment;
+
 #[cfg(feature = "deflate")]
 pub mod deflate;
 
@@ -41,15 +43,15 @@ impl PerMessageCompressionContext {
     #[inline]
     pub(crate) fn compressor<'s>(
         &'s mut self,
-    ) -> impl FnMut(&Bytes) -> Result<Bytes, CompressionError> + 's {
-        move |payload: &Bytes| match self {
+    ) -> impl FnMut(&Bytes, Fragment) -> Result<Bytes, CompressionError> + 's {
+        move |payload: &Bytes, fragment| match self {
             #[cfg(feature = "deflate")]
             Self::Deflate(deflate_config) => {
-                deflate_config.compress(payload).map_err(CompressionError::Deflate)
+                deflate_config.compress(payload, fragment).map_err(CompressionError::Deflate)
             }
             #[cfg(not(feature = "deflate"))]
             _ => {
-                let _ = payload;
+                let _ = (payload, fragment);
                 unreachable!("*PerMessageCompressionContext is uninhabited")
             }
         }
