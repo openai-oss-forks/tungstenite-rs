@@ -590,7 +590,7 @@ impl WebSocketContext {
             }
             Message::Close(code) => return self.close(stream, code),
             Message::Frame(frame) => match frame.header().opcode {
-                OpCode::Data(opcode) if frame.encode_extensions => {
+                OpCode::Data(opcode) if frame.should_encode_extensions() => {
                     let fragment =
                         if frame.header().is_final { Fragment::Final } else { Fragment::More };
                     prepare_data_frame(frame.into_payload(), opcode, fragment)?

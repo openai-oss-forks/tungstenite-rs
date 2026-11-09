@@ -220,7 +220,7 @@ pub enum Fragment {
 /// A struct representing a WebSocket frame.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Frame {
-    pub(in crate::protocol) encode_extensions: bool,
+    encode_extensions: bool,
     header: FrameHeader,
     payload: Bytes,
 }
@@ -256,6 +256,12 @@ impl Frame {
     #[inline]
     pub fn payload(&self) -> &[u8] {
         &self.payload
+    }
+
+    /// Whether the writer should apply negotiated extensions to the payload.
+    #[inline]
+    pub(crate) fn should_encode_extensions(&self) -> bool {
+        self.encode_extensions
     }
 
     /// Test whether the frame is masked.
