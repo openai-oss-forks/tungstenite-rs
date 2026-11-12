@@ -254,7 +254,12 @@ impl FrameCodec {
             return Err(Error::WriteBufferFull(Message::Frame(frame).into()));
         }
 
-        trace!("writing frame {frame}");
+        trace!(
+            "writing frame: opcode={}, final={}, payload_len={}",
+            frame.header().opcode,
+            frame.header().is_final,
+            frame.payload().len()
+        );
 
         self.out_buffer.reserve(frame.len());
         frame.format_into_buf(&mut self.out_buffer);
