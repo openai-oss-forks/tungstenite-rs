@@ -946,7 +946,12 @@ impl WebSocketContext {
             }
         }
 
-        trace!("Sending frame: {frame:?}");
+        trace!(
+            "Sending frame: opcode={}, final={}, payload_len={}",
+            frame.header().opcode,
+            frame.header().is_final,
+            frame.payload().len()
+        );
         self.frame.buffer_frame(stream, frame).check_connection_reset(self.state)
     }
 
